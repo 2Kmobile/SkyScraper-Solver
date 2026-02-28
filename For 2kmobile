@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Skyscraper Solver UI</title>
+<style>
+body { font-family: Arial, sans-serif; text-align: center; }
+#controls { margin: 20px; }
+#grid-container { display: inline-block; margin-top: 20px; }
+.grid { display: grid; }
+.cell, .clue {
+  width: 40px;
+  height: 40px;
+  border: 1px solid black;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+.cell { background-color: #f0f0f0; }
+.clue { background-color: #ffffff; }
+.disabled { background-color: #ddd; pointer-events: none; }
+button { margin: 5px; }
+</style>
+</head>
+<body>
+
+<h2>Skyscraper Solver UI</h2>
+
+<div id="controls">
+<label>サイズ: </label>
+<select id="size-select" onchange="createGrid()">
+<option value="3">3×3</option>
+<option value="4">4×4</option>
+<option value="5" selected>5×5</option>
+</select>
+<button onclick="solvePuzzle()">Solve</button>
+<button onclick="resetGrid()">Reset</button>
+<button onclick="deleteLast()">Delete</button>
+</div>
+
+<div id="grid-container"></div>
+<div id="message" style="margin-top:15px;font-weight:bold;"></div>
+
+<script>
+let size = 5;
+let clueInputs = [];
+let currentIndex = 0;
+let internalCells = [];
+let permCache = {};
+
+// Deleteキー連動
+document.addEventListener("keydown", function(e){
+  if(e.key === "Delete"){
+    e.preventDefault();
+    deleteLast();
+  }
+});
+
+// EnterキーでSolve実行
+// RキーでReset実行
+
+document.addEventListener("keydown", function(e){
+  if(e.key === "Enter"){
+    e.preventDefault();
+    solvePuzzle();
+  }
+  if(e.key === "r" || e.key === "R"){
+    e.preventDefault();
+    resetGrid();
+  }
+});
+
+function createGrid() {
+  size = parseInt(document.getElementById("size-select").value);
+  const container = document.getElementById("grid-container");
+  container.innerHTML = "";
+  document.getElementById("message").textContent = "";
+
+  const totalSize = size + 2;
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  grid.style.gridTemplateColumns = `repeat(${totalSize}, 40px)`;
+
+  clueInputs = [];
+  internalCells = [];
+  currentIndex = 0;
+
+  for (let r = 0; r < totalSize; r++) {
+    for (let c = 0; c < totalSize; c++) {
+      const cell = document.createElement("div");
+
+      if (r === 0 || r === totalSize - 1 || c === 0 || c === totalSize - 1) {
+        if ((r === 0 && c === 0) ||
+            (r === 0 && c === totalSize - 1) ||
+            (r === totalSize - 1 && c === totalSize - 1) ||
+            (r === totalSize - 1 && c === 0)) {
+          cell.className = "clue disabled";
+        } else {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.inputMode = "numeric";
+          input.maxLength = 1;
+          input.style.width = "100%";
+          input.style.height = "100%";
+          input.style.textAlign = "center";
+          input.disabled = true;
+
+          input.addEventListener("input", () => {
+            const val = parseInt(input.value);
+            if (!isNaN(val) && val >= 1 && val <= size) {
+              input.value = val;
+              input.style.backgroundColor = "";
+              input.disabled = true;
+              moveNext();
+              validateCluesStrict();
+            } else {
+              input.value = "";
+              validateCluesStrict();
+            }
+          });
+
+          cell.className = "clue";
+          cell.appendChild(input);
+        }
+      } else {
+        cell.className = "cell";
+        internalCells.push(cell);
+      }
+
+      grid.appendChild(cell);
+    }
+  }
+
+  container.appendChild(grid);
+  setupClockwiseOrder();
+}
+
+function setupClockwiseOrder() {
+  const totalSize = size + 2;
+  const ordered = [];
+
+  for (let c = 1; c <= size; c++) ordered.push(getInputAt(0, c));
+  for (let r = 1; r <= size; r++) ordered.push(getInputAt(r, totalSize - 1));
+  for (let c = size; c >= 1; c--) ordered.push(getInputAt(totalSize - 1, c));
+  for (let r = size; r >= 1; r--) ordered.push(getInputAt(r, 0));
+
+  clueInputs = ordered.filter(x => x !== null);
+
+  if (clueInputs.length > 0) {
+    clueInputs[0].disabled = false;
+    clueInputs[0].focus();
+  }
+}
+
+function moveNext() {
+  currentIndex++;
+  if (currentIndex < clueInputs.length) {
+    clueInputs[currentIndex].disabled = false;
+    clueInputs[currentIndex].focus();
+  }
+}
+
+function getInputAt(row, col) {
+  const totalSize = size + 2;
+  const index = row * totalSize + col;
+  const allCells = document.querySelectorAll("#grid-container .grid > div");
+  const cell = allCells[index];
+  if (!cell) return null;
+  return cell.querySelector("input");
+}
+
+function deleteLast() {
+  if (currentIndex > 0) {
+    currentIndex--;
+    const input = clueInputs[currentIndex];
+    input.disabled = false;
+    input.value = "";
+    input.focus();
+    validateCluesStrict();
+  }
+}
+
+function getClues() {
+  return clueInputs.map(input => parseInt(input.value) || 0);
+}
+
+function visibleCount(arr) {
+  let max = 0;
+  let count = 0;
+  for (let n of arr) {
+    if (n > max) {
+      max = n;
+      count++;
+    }
+  }
+  return count;
+}
+
+function getPermutations(n){
+  if(permCache[n]) return permCache[n];
+  const nums = Array.from({length:n},(_,i)=>i+1);
+  function perm(arr){
+    if(arr.length===0) return [[]];
+    const res=[];
+    for(let i=0;i<arr.length;i++){
+      const rest=[...arr.slice(0,i),...arr.slice(i+1)];
+      for(const p of perm(rest)) res.push([arr[i],...p]);
+    }
+    return res;
+  }
+  permCache[n]=perm(nums);
+  return permCache[n];
+}
+
+function validateCluesStrict(){
+  clueInputs.forEach(i => i.style.backgroundColor = "");
+
+  const clues = getClues();
+  const top = clues.slice(0, size);
+  const right = clues.slice(size, 2*size);
+  const bottom = clues.slice(2*size, 3*size);
+  const left = clues.slice(3*size);
+
+  const perms = getPermutations(size);
+
+  for(let i=0;i<size;i++){
+    const t = top[i];
+    const b = bottom[size-1-i];
+
+    if(t || b){
+      let possible=false;
+      for(const p of perms){
+        if(t && visibleCount(p)!==t) continue;
+        if(b && visibleCount([...p].reverse())!==b) continue;
+        possible=true;
+        break;
+      }
+      if(!possible){
+        if(t) clueInputs[i].style.backgroundColor="#ffcccc";
+        if(b) clueInputs[2*size+(size-1-i)].style.backgroundColor="#ffcccc";
+      }
+    }
+
+    const l = left[size-1-i];
+    const r = right[i];
+
+    if(l || r){
+      let possible=false;
+      for(const p of perms){
+        if(l && visibleCount(p)!==l) continue;
+        if(r && visibleCount([...p].reverse())!==r) continue;
+        possible=true;
+        break;
+      }
+      if(!possible){
+        if(l) clueInputs[3*size+(size-1-i)].style.backgroundColor="#ffcccc";
+        if(r) clueInputs[size+i].style.backgroundColor="#ffcccc";
+      }
+    }
+  }
+}
+
+function resetGrid() {
+  clueInputs.forEach(input => {
+    input.value = "";
+    input.disabled = true;
+    input.style.backgroundColor = "";
+  });
+  internalCells.forEach(c => c.textContent = "");
+  document.getElementById("message").textContent = "";
+  currentIndex = 0;
+  if (clueInputs.length > 0) {
+    clueInputs[0].disabled = false;
+    clueInputs[0].focus();
+  }
+}
+
+function solvePuzzle() {
+  internalCells.forEach(c => c.textContent = "");
+  const messageEl = document.getElementById("message");
+  messageEl.textContent = "";
+
+  const clues = getClues();
+  if (!clues.some(v=>v!==0)) return;
+
+  const top = clues.slice(0, size);
+  const right = clues.slice(size, 2 * size);
+  const bottom = clues.slice(2 * size, 3 * size).reverse();
+  const left = clues.slice(3 * size).reverse();
+
+  const perms = getPermutations(size);
+  const grid = [];
+
+  function backtrack(row) {
+    if (row === size) return true;
+
+    for (let perm of perms) {
+      if (left[row] && visibleCount(perm) !== left[row]) continue;
+      if (right[row] && visibleCount([...perm].reverse()) !== right[row]) continue;
+
+      let valid = true;
+      for (let c = 0; c < size; c++) {
+        for (let r2 = 0; r2 < row; r2++) {
+          if (grid[r2][c] === perm[c]) { valid = false; break; }
+        }
+        if (!valid) break;
+      }
+      if (!valid) continue;
+
+      grid[row] = perm;
+
+      if (row === size - 1) {
+        for (let c = 0; c < size; c++) {
+          const col = grid.map(r => r[c]);
+          if (top[c] && visibleCount(col) !== top[c]) valid = false;
+          if (bottom[c] && visibleCount([...col].reverse()) !== bottom[c]) valid = false;
+          if (!valid) break;
+        }
+        if (!valid) continue;
+      }
+
+      if (backtrack(row + 1)) return true;
+    }
+    return false;
+  }
+
+  if (backtrack(0)) {
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        internalCells[r * size + c].textContent = grid[r][c];
+      }
+    }
+  } else {
+    messageEl.style.color = "red";
+    messageEl.textContent = "解なし";
+  }
+}
+
+createGrid();
+</script>
+
+</body>
+</html>
